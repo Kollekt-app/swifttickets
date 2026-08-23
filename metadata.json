@@ -1,0 +1,5 @@
+{
+  "name": "Swift Tickets",
+  "description": "Event discovery, ticket purchasing, and table reservations for Liberia, supporting mobile, web, and USSD users.",
+  "requestFramePermissions": []
+}
