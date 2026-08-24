@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   BrowserRouter as Router,
   Routes,
@@ -144,8 +144,79 @@ export default function App() {
   const [user, setUser] =
     useState<UserProfile | null>(null);
 
+  // Undefined until the session lookup finishes, so protected screens do not
+  // flash "Access Denied" during a page refresh.
+  const [sessionChecked, setSessionChecked] =
+    useState(false);
+
+  const [backendStatus, setBackendStatus] =
+    useState<'checking' | 'ok' | 'unconfigured' | 'unreachable'>(
+      'checking'
+    );
+
   const [isMenuOpen, setIsMenuOpen] =
     useState(false);
+
+
+  // ==========================================================
+  // SESSION RESTORE
+  // ==========================================================
+  //
+  // The session lives in an httpOnly cookie, so a reload has to ask the
+  // server who the visitor is.
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const restore = async () => {
+      try {
+        const res = await fetch('/api/auth/me', {
+          credentials: 'include',
+        });
+
+        if (cancelled) return;
+
+        if (res.ok) {
+          const data = await res.json();
+
+          if (data?.user) {
+            setUser(normalizeUser(data.user));
+          }
+        }
+      } catch {
+        // No session, or the API is unreachable. Either way the visitor
+        // stays signed out; the health check below explains why.
+      } finally {
+        if (!cancelled) setSessionChecked(true);
+      }
+    };
+
+    const checkHealth = async () => {
+      try {
+        const res = await fetch('/api/health');
+        const data = await res.json().catch(() => ({}));
+
+        if (cancelled) return;
+
+        setBackendStatus(
+          data?.database === 'ok'
+            ? 'ok'
+            : data?.database === 'not_configured'
+            ? 'unconfigured'
+            : 'unreachable'
+        );
+      } catch {
+        if (!cancelled) setBackendStatus('unreachable');
+      }
+    };
+
+    restore();
+    checkHealth();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
 
   // ==========================================================
@@ -533,19 +604,27 @@ const handleLogout = async () => {
 
 
           {/* ==================================================
-              MOCK MODE BANNER
+              BACKEND STATUS BANNER
+
+              Only shown when something actually needs attention, so a
+              healthy deployment has no banner at all.
           ================================================== */}
 
-          <div className="bg-orange-600 text-white text-[10px] font-black uppercase tracking-[0.2em] py-1 text-center sticky top-0 z-[60]">
-            MOCK MODE ACTIVE • NO FIREBASE CONNECTION REQUIRED
-          </div>
+          {(backendStatus === 'unconfigured' ||
+            backendStatus === 'unreachable') && (
+            <div className="bg-red-600 text-white text-[10px] font-black uppercase tracking-[0.2em] py-2 px-4 text-center sticky top-0 z-[60]">
+              {backendStatus === 'unconfigured'
+                ? 'Database not configured — set DATABASE_URL in your environment and redeploy'
+                : 'Cannot reach the Swift Tickets API — check your deployment logs'}
+            </div>
+          )}
 
 
           {/* ==================================================
               NAVIGATION
           ================================================== */}
 
-          <nav className="fixed top-6 w-full z-50 bg-[#0a0a0a]/80 backdrop-blur-xl border-b border-white/10">
+          <nav className="fixed top-0 w-full z-50 bg-[#0a0a0a]/80 backdrop-blur-xl border-b border-white/10">
 
             <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
 
@@ -1469,6 +1548,18 @@ const handleLogout = async () => {
 
           <main className="pt-20 pb-12">
 
+            {!sessionChecked ? (
+
+              <div className="min-h-[60vh] flex flex-col items-center justify-center gap-4">
+                <div className="w-12 h-12 border-4 border-orange-600 border-t-transparent rounded-full animate-spin" />
+
+                <p className="text-[10px] font-black uppercase tracking-[0.3em] text-white/30">
+                  Loading Swift Tickets
+                </p>
+              </div>
+
+            ) : (
+
             <Routes>
 
               <Route
@@ -1585,9 +1676,10 @@ const handleLogout = async () => {
                 element={
                   <OrganizerScannerLoginScreen
                     user={user}
-                    onLogin={
-                      handleLogin
-                    }
+                    onAuthRequired={() => {
+                      setAuthMode('login');
+                      setShowAuthModal(true);
+                    }}
                   />
                 }
               />
@@ -1667,7 +1759,102 @@ const handleLogout = async () => {
 
             </Routes>
 
+            )}
+
           </main>
+
+
+          {/* ==================================================
+              FOOTER
+          ================================================== */}
+
+          <footer className="border-t border-white/10 bg-black/40">
+
+            <div className="max-w-7xl mx-auto px-4 py-16 grid gap-12 md:grid-cols-4">
+
+              <div className="space-y-4 md:col-span-2">
+
+                <div className="flex items-center gap-2 text-xl font-black tracking-tighter">
+                  <div className="w-8 h-8 bg-orange-600 rounded-full flex items-center justify-center">
+                    <TicketIcon size={18} />
+                  </div>
+                  SWIFT TICKETS
+                </div>
+
+                <p className="text-white/40 text-sm max-w-sm leading-relaxed">
+                  Event discovery, ticketing and table reservations for
+                  Liberia. Every ticket carries a QR code that can be verified
+                  by anyone, anywhere — no app required.
+                </p>
+
+              </div>
+
+
+              <div className="space-y-3">
+
+                <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30">
+                  Discover
+                </h3>
+
+                <Link to="/" className="block text-sm text-white/60 hover:text-white transition-colors">
+                  Events
+                </Link>
+
+                <Link to="/competitions" className="block text-sm text-white/60 hover:text-white transition-colors">
+                  Competitions
+                </Link>
+
+                <Link to="/sponsors" className="block text-sm text-white/60 hover:text-white transition-colors">
+                  Sponsors
+                </Link>
+
+              </div>
+
+
+              <div className="space-y-3">
+
+                <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30">
+                  Organizers
+                </h3>
+
+                <Link to="/advertise" className="block text-sm text-white/60 hover:text-white transition-colors">
+                  Advertise
+                </Link>
+
+                <Link to="/verify-ticket" className="block text-sm text-white/60 hover:text-white transition-colors">
+                  Verify a ticket
+                </Link>
+
+                <Link to="/scanner" className="block text-sm text-white/60 hover:text-white transition-colors">
+                  Gate scanner
+                </Link>
+
+              </div>
+
+            </div>
+
+
+            <div className="border-t border-white/5">
+
+              <div className="max-w-7xl mx-auto px-4 py-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+                  &copy; {new Date().getFullYear()} Swift Tickets &middot; Monrovia, Liberia
+                </p>
+
+                <Link
+                  to="/verify-ticket"
+                  className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-orange-500 hover:text-orange-400 transition-colors"
+                >
+                  <ShieldCheck size={14} />
+                  Check a ticket is genuine
+                </Link>
+
+              </div>
+
+            </div>
+
+          </footer>
 
         </div>
 

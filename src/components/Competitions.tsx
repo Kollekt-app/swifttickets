@@ -37,83 +37,42 @@ interface CompetitionsProps {
 
 /*
 |--------------------------------------------------------------------------
-| STORAGE KEYS
+| API HELPERS
 |--------------------------------------------------------------------------
-| These keys are shared by Organizer and Customer sessions.
-| This is the important fix that prevents competitions disappearing
-| after logout/login.
-*/
-const COMPETITIONS_STORAGE_KEY = 'swift_ticket_competitions_v1';
-const VOTE_TRANSACTIONS_STORAGE_KEY = 'swift_ticket_vote_transactions_v1';
-
-/*
-|--------------------------------------------------------------------------
-| Safe localStorage helpers
-|--------------------------------------------------------------------------
+| Competitions and votes live on the server so every visitor sees the same
+| leaderboard. (They used to be kept in localStorage, which meant each
+| browser had its own private copy of the results.)
 */
 
-function loadStoredCompetitions(): Competition[] {
-  try {
-    const raw = localStorage.getItem(COMPETITIONS_STORAGE_KEY);
+async function fetchCompetitions(): Promise<Competition[]> {
+  const res = await fetch('/api/competitions');
 
-    if (!raw) {
-      return [];
-    }
-
-    const parsed = JSON.parse(raw);
-
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed;
-  } catch (error) {
-    console.error('Failed to load competitions:', error);
-    return [];
+  if (!res.ok) {
+    throw new Error(`Failed to load competitions (${res.status})`);
   }
+
+  const data = await res.json();
+
+  return Array.isArray(data) ? data : [];
 }
 
-function saveStoredCompetitions(competitions: Competition[]) {
-  try {
-    localStorage.setItem(
-      COMPETITIONS_STORAGE_KEY,
-      JSON.stringify(competitions)
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body)
+  });
+
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    throw new Error(
+      data?.error || `Request failed (${res.status})`
     );
-  } catch (error) {
-    console.error('Failed to save competitions:', error);
   }
-}
 
-function loadStoredTransactions(): VoteTransaction[] {
-  try {
-    const raw = localStorage.getItem(VOTE_TRANSACTIONS_STORAGE_KEY);
-
-    if (!raw) {
-      return [];
-    }
-
-    const parsed = JSON.parse(raw);
-
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed;
-  } catch (error) {
-    console.error('Failed to load vote transactions:', error);
-    return [];
-  }
-}
-
-function saveStoredTransactions(transactions: VoteTransaction[]) {
-  try {
-    localStorage.setItem(
-      VOTE_TRANSACTIONS_STORAGE_KEY,
-      JSON.stringify(transactions)
-    );
-  } catch (error) {
-    console.error('Failed to save vote transactions:', error);
-  }
+  return data as T;
 }
 
 export default function Competitions({
@@ -124,53 +83,64 @@ export default function Competitions({
   |--------------------------------------------------------------------------
   | COMPETITIONS
   |--------------------------------------------------------------------------
-  | IMPORTANT:
-  | We initialize from localStorage instead of [].
+  | Loaded from the API so every visitor sees the same live leaderboard.
   */
-  const [competitions, setCompetitions] = useState<Competition[]>(
-    () => loadStoredCompetitions()
-  );
-
-  const [voteTransactions, setVoteTransactions] = useState<VoteTransaction[]>(
-    () => loadStoredTransactions()
-  );
+  const [competitions, setCompetitions] = useState<Competition[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [isAddingContestant, setIsAddingContestant] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   /*
   |--------------------------------------------------------------------------
-  | Keep localStorage synchronized
+  | Pull the latest competitions and vote counts
   |--------------------------------------------------------------------------
+  | `refresh` is called after every mutation so the leaderboard reflects the
+  | server's tally rather than an optimistic local guess.
   */
+  const refresh = async (): Promise<Competition[]> => {
+    const latest = await fetchCompetitions();
+
+    setCompetitions(latest);
+
+    // Keep the open detail view in sync with the refreshed data.
+    setSelectedComp(previous =>
+      previous
+        ? latest.find(comp => comp.id === previous.id) ?? previous
+        : previous
+    );
+
+    return latest;
+  };
 
   useEffect(() => {
-    saveStoredCompetitions(competitions);
-  }, [competitions]);
+    let cancelled = false;
 
-  useEffect(() => {
-    saveStoredTransactions(voteTransactions);
-  }, [voteTransactions]);
+    const load = async () => {
+      try {
+        const latest = await fetchCompetitions();
 
-  /*
-  |--------------------------------------------------------------------------
-  | Cross-tab synchronization
-  |--------------------------------------------------------------------------
-  | If Organizer creates a competition in one browser tab, another tab
-  | can see it without refreshing.
-  */
-  useEffect(() => {
-    const handleStorageChange = (event: StorageEvent) => {
-      if (event.key === COMPETITIONS_STORAGE_KEY) {
-        setCompetitions(loadStoredCompetitions());
-      }
+        if (!cancelled) {
+          setCompetitions(latest);
+          setLoadError(null);
+        }
+      } catch (error) {
+        console.error('Failed to load competitions:', error);
 
-      if (event.key === VOTE_TRANSACTIONS_STORAGE_KEY) {
-        setVoteTransactions(loadStoredTransactions());
+        if (!cancelled) {
+          setLoadError(
+            'Could not load competitions. Please try again.'
+          );
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
     };
 
-    window.addEventListener('storage', handleStorageChange);
+    load();
 
     return () => {
-      window.removeEventListener('storage', handleStorageChange);
+      cancelled = true;
     };
   }, []);
 
@@ -428,7 +398,7 @@ export default function Competitions({
   |--------------------------------------------------------------------------
   */
 
-  const handlePublishCompetition = () => {
+  const handlePublishCompetition = async () => {
     if (!user) {
       toast.error(
         'You must be logged in as an Organizer.'
@@ -543,90 +513,48 @@ export default function Competitions({
       }
     ];
 
-    const newCompetition: Competition = {
-      id: `comp-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`,
+    setIsPublishing(true);
 
-      title: compTitle.trim(),
+    try {
+      const created = await postJson<Competition>('/api/competitions', {
+        title: compTitle.trim(),
+        description: compDesc.trim(),
+        associatedEvent:
+          associatedEvent.trim() || 'Liberia Event Series',
+        category,
+        location,
+        votePrice: baseVotePrice,
+        commissionRate,
+        showLiveLeaderboard,
+        votePackages: defaultPackages,
+        imageUrl:
+          imageUrl ||
+          'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=800&q=80',
+        startDate: new Date(`${startDate}T00:00:00`).toISOString(),
+        endDate: new Date(`${endDate}T23:59:59`).toISOString(),
+        status: 'Active',
+        candidates: filteredCandidates
+      });
 
-      description: compDesc.trim(),
+      await refresh();
 
-      associatedEvent:
-        associatedEvent.trim() ||
-        'Liberia Event Series',
+      toast.success(
+        `Competition "${created.title}" is now live with ${created.candidates.length} contestant(s)!`
+      );
+    } catch (error: any) {
+      console.error('Failed to publish competition:', error);
 
-      category,
+      toast.error(
+        error?.message || 'Could not publish the competition.'
+      );
 
-      location,
-
-      votePrice: baseVotePrice,
-
-      commissionRate,
-
-      showLiveLeaderboard,
-
-      votePackages: defaultPackages,
-
-      imageUrl:
-        imageUrl ||
-        'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=800&q=80',
-
-      /*
-      |--------------------------------------------------------------------------
-      | VERY IMPORTANT
-      |--------------------------------------------------------------------------
-      | Save the real organizer ID.
-      */
-      organizerId: user.uid,
-
-      startDate: new Date(
-        `${startDate}T00:00:00`
-      ).toISOString(),
-
-      endDate: new Date(
-        `${endDate}T23:59:59`
-      ).toISOString(),
-
-      status: 'Active',
-
-      candidates: filteredCandidates
-    };
-
-    /*
-    |--------------------------------------------------------------------------
-    | IMPORTANT FIX:
-    | Functional update prevents stale state.
-    | useEffect below automatically saves the result to localStorage.
-    |--------------------------------------------------------------------------
-    */
-
-    setCompetitions(prev => [
-      newCompetition,
-      ...prev
-    ]);
-
-    /*
-    |--------------------------------------------------------------------------
-    | Immediately save too.
-    | This makes sure the competition is available even if the component
-    | changes immediately after publishing.
-    |--------------------------------------------------------------------------
-    */
-
-    const currentCompetitions =
-      loadStoredCompetitions();
-
-    saveStoredCompetitions([
-      newCompetition,
-      ...currentCompetitions
-    ]);
+      return;
+    } finally {
+      setIsPublishing(false);
+    }
 
     setShowSetupWizard(false);
 
-    toast.success(
-      `Competition "${newCompetition.title}" is now live with ${filteredCandidates.length} contestant(s)!`
-    );
 
     /*
     |--------------------------------------------------------------------------
@@ -664,7 +592,7 @@ export default function Competitions({
   |--------------------------------------------------------------------------
   */
 
-  const handleAddContestantToExisting = (
+  const handleAddContestantToExisting = async (
     e: React.FormEvent
   ) => {
     e.preventDefault();
@@ -711,96 +639,38 @@ export default function Competitions({
         addContestantComp.candidates.length + 1
       ).padStart(2, '0')}`;
 
-    const newCandidate: Candidate = {
-      id: `cand-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`,
+    setIsAddingContestant(true);
 
-      contestantNumber: nextNumber,
-
-      name: newCandidateName.trim(),
-
-      description:
-        newCandidateDesc.trim() ||
-        'Contestant candidate',
-
-      imageUrl:
-        newCandidateImage ||
-        'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80',
-
-      voteCount: 0
-    };
-
-    setCompetitions(prev =>
-      prev.map(competition => {
-        if (
-          competition.id !==
-          addContestantComp.id
-        ) {
-          return competition;
+    try {
+      await postJson<Competition>(
+        `/api/competitions/${addContestantComp.id}/candidates`,
+        {
+          contestantNumber: nextNumber,
+          name: newCandidateName.trim(),
+          description:
+            newCandidateDesc.trim() || 'Contestant candidate',
+          imageUrl:
+            newCandidateImage ||
+            'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80'
         }
+      );
 
-        return {
-          ...competition,
-          candidates: [
-            ...competition.candidates,
-            newCandidate
-          ]
-        };
-      })
-    );
+      await refresh();
 
-    setSelectedComp(prev => {
-      if (
-        !prev ||
-        prev.id !== addContestantComp.id
-      ) {
-        return prev;
-      }
+      toast.success(
+        `Added ${newCandidateName.trim()} (${nextNumber}) to ${addContestantComp.title}!`
+      );
+    } catch (error: any) {
+      console.error('Failed to add contestant:', error);
 
-      return {
-        ...prev,
-        candidates: [
-          ...prev.candidates,
-          newCandidate
-        ]
-      };
-    });
+      toast.error(
+        error?.message || 'Could not add the contestant.'
+      );
 
-    /*
-    |--------------------------------------------------------------------------
-    | Persist immediately.
-    |--------------------------------------------------------------------------
-    */
-
-    const stored =
-      loadStoredCompetitions();
-
-    const updatedStored =
-      stored.map(competition => {
-        if (
-          competition.id !==
-          addContestantComp.id
-        ) {
-          return competition;
-        }
-
-        return {
-          ...competition,
-          candidates: [
-            ...competition.candidates,
-            newCandidate
-          ]
-        };
-      });
-
-    saveStoredCompetitions(
-      updatedStored
-    );
-
-    toast.success(
-      `Added ${newCandidate.name} (${nextNumber}) to ${addContestantComp.title}!`
-    );
+      return;
+    } finally {
+      setIsAddingContestant(false);
+    }
 
     setAddContestantComp(null);
     setNewCandidateName('');
@@ -861,7 +731,7 @@ export default function Competitions({
   |--------------------------------------------------------------------------
   */
 
-  const handleConfirmVotePayment = () => {
+  const handleConfirmVotePayment = async () => {
     if (!votingTarget) {
       return;
     }
@@ -887,244 +757,45 @@ export default function Competitions({
 
     setIsProcessingVote(true);
 
-    setTimeout(() => {
-      const purchasedVotes =
-        selectedVotePackage.votes;
+    const purchasedVotes = selectedVotePackage.votes;
+    const { comp, candidate } = votingTarget;
 
-      const totalAmount =
-        selectedVotePackage.price;
-
-      const {
-        comp,
-        candidate
-      } = votingTarget;
-
-      const rate =
-        comp.commissionRate ?? 0.1;
-
-      const commission = Number(
-        (
-          totalAmount * rate
-        ).toFixed(2)
-      );
-
-      const netEarnings = Number(
-        (
-          totalAmount -
-          commission
-        ).toFixed(2)
-      );
-
-      const txRef =
-        `VOTE-${paymentMethod.toUpperCase()}-${Math.floor(
-          10000 +
-            Math.random() * 90000
-        )}`;
-
-      const newTransaction: VoteTransaction =
-        {
-          id: `vt-${Date.now()}-${Math.random()
-            .toString(36)
-            .slice(2, 8)}`,
-
-          competitionId: comp.id,
-
-          competitionTitle:
-            comp.title,
-
-          candidateId:
-            candidate.id,
-
-          candidateName:
-            candidate.name,
-
-          contestantNumber:
-            candidate.contestantNumber,
-
-          voterName:
-            voterName.trim() ||
-            'Anonymous Voter',
-
-          voterPhone:
-            voterPhone.trim(),
-
-          voteQuantity:
-            purchasedVotes,
-
-          amountPaid:
-            totalAmount,
-
-          commissionAmount:
-            commission,
-
-          organizerEarnings:
-            netEarnings,
-
-          paymentMethod,
-
-          reference:
-            txRef,
-
-          timestamp:
-            new Date().toISOString()
-        };
-
+    try {
       /*
-      |--------------------------------------------------------------------------
-      | Save transaction
-      |--------------------------------------------------------------------------
+      |----------------------------------------------------------------------
+      | The server owns the maths: it prices the bundle from the
+      | competition's own vote price, splits the platform commission and
+      | credits the organizer. A tampered client total is ignored.
+      |----------------------------------------------------------------------
       */
-
-      setVoteTransactions(prev => [
-        newTransaction,
-        ...prev
-      ]);
-
-      const storedTransactions =
-        loadStoredTransactions();
-
-      saveStoredTransactions([
-        newTransaction,
-        ...storedTransactions
-      ]);
-
-      /*
-      |--------------------------------------------------------------------------
-      | UPDATE COMPETITION VOTE COUNT
-      |--------------------------------------------------------------------------
-      */
-
-      setCompetitions(prev =>
-        prev.map(competition => {
-          if (
-            competition.id !==
-            comp.id
-          ) {
-            return competition;
-          }
-
-          return {
-            ...competition,
-
-            candidates:
-              competition.candidates.map(
-                contestant => {
-                  if (
-                    contestant.id !==
-                    candidate.id
-                  ) {
-                    return contestant;
-                  }
-
-                  return {
-                    ...contestant,
-
-                    voteCount:
-                      contestant.voteCount +
-                      purchasedVotes
-                  };
-                }
-              )
-          };
-        })
-      );
-
-      /*
-      |--------------------------------------------------------------------------
-      | Update selected competition immediately
-      |--------------------------------------------------------------------------
-      */
-
-      setSelectedComp(prev => {
-        if (
-          !prev ||
-          prev.id !== comp.id
-        ) {
-          return prev;
-        }
-
-        return {
-          ...prev,
-
-          candidates:
-            prev.candidates.map(
-              contestant => {
-                if (
-                  contestant.id !==
-                  candidate.id
-                ) {
-                  return contestant;
-                }
-
-                return {
-                  ...contestant,
-
-                  voteCount:
-                    contestant.voteCount +
-                    purchasedVotes
-                };
-              }
-            )
-        };
+      const result = await postJson<{
+        transaction: VoteTransaction;
+        competition: Competition;
+      }>(`/api/competitions/${comp.id}/votes`, {
+        candidateId: candidate.id,
+        voteQuantity: purchasedVotes,
+        voterName: voterName.trim() || 'Anonymous Voter',
+        voterPhone: voterPhone.trim(),
+        paymentMethod
       });
 
-      /*
-      |--------------------------------------------------------------------------
-      | Persist vote count immediately
-      |--------------------------------------------------------------------------
-      */
+      await refresh();
 
-      const storedCompetitions =
-        loadStoredCompetitions();
-
-      const updatedCompetitions =
-        storedCompetitions.map(
-          competition => {
-            if (
-              competition.id !==
-              comp.id
-            ) {
-              return competition;
-            }
-
-            return {
-              ...competition,
-
-              candidates:
-                competition.candidates.map(
-                  contestant => {
-                    if (
-                      contestant.id !==
-                      candidate.id
-                    ) {
-                      return contestant;
-                    }
-
-                    return {
-                      ...contestant,
-
-                      voteCount:
-                        contestant.voteCount +
-                        purchasedVotes
-                    };
-                  }
-                )
-            };
-          }
-        );
-
-      saveStoredCompetitions(
-        updatedCompetitions
-      );
-
-      setIsProcessingVote(false);
       setVoteSuccess(true);
-      setLastTxRef(txRef);
+      setLastTxRef(result.transaction.reference);
 
       toast.success(
         `${purchasedVotes} vote(s) successfully added for ${candidate.name}!`
       );
-    }, 1200);
+    } catch (error: any) {
+      console.error('Vote failed:', error);
+
+      toast.error(
+        error?.message || 'Your vote could not be processed.'
+      );
+    } finally {
+      setIsProcessingVote(false);
+    }
   };
 
   /*
@@ -1286,7 +957,37 @@ export default function Competitions({
       {/* EMPTY STATE */}
       {/* ================================================================ */}
 
-      {filteredCompetitions.length === 0 && (
+      {isLoading && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+          {[1, 2, 3].map(placeholder => (
+            <div
+              key={placeholder}
+              className="h-[420px] bg-white/5 border border-white/10 rounded-[2.5rem] animate-pulse"
+            />
+          ))}
+        </div>
+      )}
+
+      {!isLoading && loadError && (
+        <div className="py-20 text-center border border-red-500/30 bg-red-500/5 rounded-[2.5rem]">
+          <h2 className="text-2xl font-black uppercase text-red-400">
+            Competitions Unavailable
+          </h2>
+
+          <p className="text-white/40 text-sm mt-2 max-w-md mx-auto">
+            {loadError}
+          </p>
+
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-6 bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-full text-xs font-black uppercase tracking-widest"
+          >
+            Try Again
+          </button>
+        </div>
+      )}
+
+      {!isLoading && !loadError && filteredCompetitions.length === 0 && (
         <div className="py-20 text-center border border-white/10 bg-white/5 rounded-[2.5rem]">
 
           <Trophy
@@ -2589,9 +2290,12 @@ export default function Competitions({
                       onClick={
                         handlePublishCompetition
                       }
-                      className="bg-orange-600 hover:bg-orange-500 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-orange-600/20"
+                      disabled={isPublishing}
+                      className="bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-orange-600/20"
                     >
-                      🚀 Publish Competition
+                      {isPublishing
+                        ? 'Publishing…'
+                        : '🚀 Publish Competition'}
                     </button>
                   </div>
                 </div>
@@ -2739,9 +2443,12 @@ export default function Competitions({
 
                 <button
                   type="submit"
-                  className="w-full bg-orange-600 hover:bg-orange-500 text-white py-4 rounded-2xl font-black uppercase tracking-widest transition-all shadow-lg shadow-orange-600/20"
+                  disabled={isAddingContestant}
+                  className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-4 rounded-2xl font-black uppercase tracking-widest transition-all shadow-lg shadow-orange-600/20"
                 >
-                  Confirm Add Contestant
+                  {isAddingContestant
+                    ? 'Adding…'
+                    : 'Confirm Add Contestant'}
                 </button>
               </form>
             </motion.div>

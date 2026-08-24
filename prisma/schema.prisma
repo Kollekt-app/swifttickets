@@ -1,0 +1,259 @@
+// Swift Tickets — data model
+// Provider is PostgreSQL so it runs on any serverless Postgres
+// (Neon, Vercel Postgres, Supabase, Railway...).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  Admin
+  Organizer
+  Customer
+}
+
+enum EventStatus {
+  Draft
+  Published
+  Cancelled
+}
+
+enum TicketStatus {
+  Active
+  Used
+  Cancelled
+  Scanned
+  Refunded
+}
+
+enum WithdrawalStatus {
+  pending
+  paid
+  failed
+}
+
+enum CompetitionStatus {
+  Draft
+  Active
+  Closed
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  phone        String?
+  passwordHash String
+  role         Role     @default(Customer)
+  plan         String?
+  payoutMethod String?
+  payoutDetails String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  events       Event[]
+  tickets      Ticket[]
+  withdrawals  Withdrawal[]
+  transactions WalletTransaction[]
+  competitions Competition[]
+
+  @@index([phone])
+}
+
+model Event {
+  id               String      @id @default(cuid())
+  title            String
+  description      String      @default("")
+  date             DateTime
+  endDate          DateTime?
+  location         String      @default("")
+  organizerId      String
+  organizer        User        @relation(fields: [organizerId], references: [id], onDelete: Cascade)
+  imageUrl         String      @default("")
+  images           String[]    @default([])
+  category         String      @default("Music")
+  status           EventStatus @default(Published)
+  isPrivate        Boolean     @default(false)
+  passwordHash     String?
+  schedule         Json?
+  insuranceEnabled Boolean     @default(false)
+  priorityLevel    Int         @default(0)
+  featuredUntil    DateTime?
+  viewCount        Int         @default(0)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  ticketTypes  TicketType[]
+  tableOptions TableOption[]
+  tickets      Ticket[]
+  promoCodes   PromoCode[]
+
+  @@index([organizerId])
+  @@index([status, date])
+}
+
+model TicketType {
+  id       String @id @default(cuid())
+  eventId  String
+  event    Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name     String
+  price    Float  @default(0)
+  capacity Int    @default(0)
+  sold     Int    @default(0)
+  position Int    @default(0)
+
+  @@index([eventId])
+}
+
+model TableOption {
+  id         String  @id @default(cuid())
+  eventId    String
+  event      Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  number     Int
+  price      Float   @default(0)
+  capacity   Int     @default(0)
+  isReserved Boolean @default(false)
+
+  @@unique([eventId, number])
+  @@index([eventId])
+}
+
+model Ticket {
+  id             String       @id @default(cuid())
+  eventId        String
+  event          Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId         String?
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  attendeeName   String
+  attendeeEmail  String
+  attendeePhone  String?
+  ticketType     String
+  ticketCode     String       @unique
+  status         TicketStatus @default(Active)
+  deliveryMethod String       @default("QR")
+  channel        String       @default("Web")
+  scannedAt      DateTime?
+  scannedGate    String?
+  scannedBy      String?
+  pricePaid      Float        @default(0)
+  promoCodeUsed  String?
+  insuranceId    String?
+  paymentRef     String?
+  transferredFrom String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([eventId, status])
+  @@index([userId])
+  @@index([attendeeEmail])
+}
+
+model PromoCode {
+  id           String   @id @default(cuid())
+  code         String
+  eventId      String
+  event        Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  discountType String   @default("Percentage")
+  value        Float    @default(0)
+  expiryDate   DateTime?
+  usageLimit   Int      @default(0)
+  usageCount   Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  @@unique([eventId, code])
+}
+
+model Withdrawal {
+  id          String           @id @default(cuid())
+  organizerId String
+  organizer   User             @relation(fields: [organizerId], references: [id], onDelete: Cascade)
+  amount      Float
+  provider    String           @default("orange_money")
+  phone       String           @default("")
+  status      WithdrawalStatus @default(pending)
+  createdAt   DateTime         @default(now())
+  processedAt DateTime?
+
+  @@index([status])
+  @@index([organizerId])
+}
+
+model WalletTransaction {
+  id          String   @id @default(cuid())
+  organizerId String
+  organizer   User     @relation(fields: [organizerId], references: [id], onDelete: Cascade)
+  type        String // "credit" | "debit"
+  amount      Float
+  description String   @default("")
+  reference   String   @default("")
+  createdAt   DateTime @default(now())
+
+  @@index([organizerId, createdAt])
+}
+
+model Competition {
+  id                 String            @id @default(cuid())
+  title              String
+  description        String            @default("")
+  imageUrl           String            @default("")
+  organizerId        String
+  organizer          User              @relation(fields: [organizerId], references: [id], onDelete: Cascade)
+  associatedEvent    String?
+  category           String?
+  location           String?
+  votePrice          Float             @default(1)
+  votePackages       Json?
+  commissionRate     Float             @default(0.1)
+  showLiveLeaderboard Boolean          @default(true)
+  startDate          DateTime
+  endDate            DateTime
+  status             CompetitionStatus @default(Draft)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  candidates Candidate[]
+  votes      VoteTransaction[]
+
+  @@index([status])
+}
+
+model Candidate {
+  id                String      @id @default(cuid())
+  competitionId     String
+  competition       Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  contestantNumber  String?
+  name              String
+  description       String      @default("")
+  imageUrl          String      @default("")
+  voteCount         Int         @default(0)
+  position          Int         @default(0)
+
+  votes VoteTransaction[]
+
+  @@index([competitionId])
+}
+
+model VoteTransaction {
+  id                String      @id @default(cuid())
+  competitionId     String
+  competition       Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  candidateId       String
+  candidate         Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  voterName         String
+  voterPhone        String      @default("")
+  voteQuantity      Int         @default(1)
+  amountPaid        Float       @default(0)
+  commissionAmount  Float       @default(0)
+  organizerEarnings Float       @default(0)
+  paymentMethod     String      @default("orange_money")
+  reference         String      @unique
+  createdAt         DateTime    @default(now())
+
+  @@index([competitionId, createdAt])
+  @@index([candidateId])
+}

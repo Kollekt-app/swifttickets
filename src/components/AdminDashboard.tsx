@@ -4,12 +4,10 @@ import { Plus, Trash2, Database, Music, Utensils, Waves, GlassWater } from 'luci
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 
-import { MOCK_EVENTS, MOCK_USER } from '../mockData';
 
 export default function AdminDashboard({ user }: { user: UserProfile | null }) {
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isSeeding, setIsSeeding] = useState(false);
 
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [withdrawals, setWithdrawals] = useState<any[]>([]);
