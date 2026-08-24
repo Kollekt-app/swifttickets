@@ -3,46 +3,85 @@ import { motion, AnimatePresence } from 'motion/react';
 import { QrCode, Camera, CheckCircle2, XCircle, ChevronLeft, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
-import { MOCK_TICKETS } from '../mockData';
 
-export default function CheckIn({ onBack }: { onBack: () => void }) {
-  const [scanMode, setScanMode] = useState<'camera' | 'manual'>('camera');
+export default function CheckIn({
+  onBack,
+  eventId,
+  eventTitle,
+  gate = 'Main Gate',
+}: {
+  onBack: () => void;
+  eventId?: string;
+  eventTitle?: string;
+  gate?: string;
+}) {
+  const [scanMode, setScanMode] = useState<'camera' | 'manual'>('manual');
   const [ticketId, setTicketId] = useState('');
   const [validating, setValidating] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string; ticket?: any } | null>(null);
 
-  const handleValidate = async (id: string) => {
+  const handleValidate = async (code: string) => {
+    const trimmed = code.trim().toUpperCase();
+
+    if (!trimmed) return;
+
     setValidating(true);
     setResult(null);
 
-    // Simulate API call
-    setTimeout(() => {
-      const ticket = MOCK_TICKETS.find(t => t.id === id || t.qrCode === id);
-      
-      if (ticket) {
-        if (ticket.status === 'Used') {
-          setResult({
-            success: false,
-            message: 'Ticket already scanned!',
-            ticket
-          });
-        } else {
-          setResult({
-            success: true,
-            message: 'Access Granted',
-            ticket
-          });
-          toast.success('Check-in successful!');
-        }
-      } else {
-        setResult({
-          success: false,
-          message: 'Invalid Ticket'
-        });
-        toast.error('Ticket not found');
+    try {
+      // With an event selected this actually admits the holder; without one
+      // it is a read-only authenticity check.
+      const response = eventId
+        ? await fetch('/api/scanner/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ ticketCode: trimmed, eventId, gate }),
+          })
+        : await fetch(
+            `/api/tickets/verify/${encodeURIComponent(trimmed)}`,
+            { credentials: 'include' },
+          );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok && !data?.status) {
+        throw new Error(data?.error || `Request failed (${response.status})`);
       }
+
+      const success = data?.valid === true;
+
+      setResult({
+        success,
+        message:
+          data?.message ||
+          (success ? 'Access Granted' : 'Invalid Ticket'),
+        ticket: data?.ticketCode
+          ? {
+              attendeeName: data.attendeeName,
+              ticketType: data.ticketType,
+              ticketCode: data.ticketCode,
+            }
+          : undefined,
+      });
+
+      if (success) {
+        toast.success('Check-in successful!');
+      } else {
+        toast.error(data?.message || 'Ticket not accepted');
+      }
+    } catch (error: any) {
+      console.error('Check-in failed:', error);
+
+      setResult({
+        success: false,
+        message: error?.message || 'Could not reach the server',
+      });
+
+      toast.error('Could not reach the verification server');
+    } finally {
       setValidating(false);
-    }, 1000);
+    }
   };
 
   return (
@@ -56,7 +95,11 @@ export default function CheckIn({ onBack }: { onBack: () => void }) {
 
       <div className="text-center mb-12">
         <h1 className="text-4xl font-black tracking-tighter uppercase mb-2">Ticket Validation</h1>
-        <p className="text-white/40">Scan QR codes or enter ticket IDs to check in attendees.</p>
+        <p className="text-white/40">
+          {eventTitle
+            ? `Admitting attendees to ${eventTitle} at ${gate}.`
+            : 'Enter a ticket code to verify it. Select an event on the dashboard to admit attendees.'}
+        </p>
       </div>
 
       <div className="bg-white/5 border border-white/10 rounded-[3rem] p-8 space-y-8">
@@ -99,12 +142,12 @@ export default function CheckIn({ onBack }: { onBack: () => void }) {
                 <div className="absolute top-0 left-0 w-full h-1 bg-orange-500 animate-[scan_2s_linear_infinite]" />
               </div>
               
-              <button 
-                onClick={() => handleValidate('TKT-12345')}
+              <a
+                href="/scanner"
                 className="absolute bottom-8 bg-white/10 hover:bg-white/20 px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all"
               >
-                Simulate Scan
-              </button>
+                Open Full Camera Scanner
+              </a>
             </motion.div>
           ) : (
             <motion.div 
@@ -116,7 +159,7 @@ export default function CheckIn({ onBack }: { onBack: () => void }) {
             >
               <input 
                 type="text" 
-                placeholder="Enter Ticket ID (e.g. TKT-12345)" 
+                placeholder="Enter ticket code (e.g. SWIFT-8X92K-1024)" 
                 className="w-full bg-white/5 border border-white/10 rounded-2xl p-6 text-center text-xl font-black uppercase tracking-widest focus:outline-none focus:border-orange-500"
                 value={ticketId}
                 onChange={e => setTicketId(e.target.value)}

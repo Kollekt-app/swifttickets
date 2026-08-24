@@ -560,6 +560,8 @@ export default function OrganizerDashboard({
         onBack={() =>
           setView('dashboard')
         }
+        eventId={activeEvent?.id}
+        eventTitle={activeEvent?.title}
       />
     );
   }

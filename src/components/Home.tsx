@@ -20,7 +20,6 @@ import {
 import { Link } from 'react-router-dom';
 import { cn } from '../lib/utils';
 
-import { MOCK_EVENTS } from '../mockData';
 
 interface HomeProps {
   user: UserProfile | null;

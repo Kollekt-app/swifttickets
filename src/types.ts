@@ -21,6 +21,12 @@ export interface Event {
   featuredUntil?: string;
   viewCount?: number;
   conversionRate?: number;
+  /** Public contact block for the event page. */
+  organizer?: {
+    name: string;
+    email?: string;
+    phone?: string;
+  };
 }
 
 export interface TicketType {
@@ -56,6 +62,18 @@ export interface Ticket {
   pricePaid: number;
   promoCodeUsed?: string;
   insuranceId?: string;
+  /** Denormalised event details, sent with every ticket so the wallet and
+   *  scanner can render without a second request. */
+  eventTitle?: string;
+  eventDate?: string;
+  eventLocation?: string;
+  eventImageUrl?: string;
+  event?: {
+    title?: string;
+    date?: string;
+    location?: string;
+    imageUrl?: string;
+  };
 }
 
 export interface PromoCode {
@@ -79,7 +97,9 @@ export interface Reservation {
 }
 
 export interface UserProfile {
+  /** Primary identifier. `id` mirrors it so either spelling works. */
   uid: string;
+  id?: string;
   name: string;
   email: string;
   phone?: string;

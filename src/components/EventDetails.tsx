@@ -91,13 +91,35 @@ export default function EventDetails({ user, onAuthRequired }: { user: UserProfi
     fetchEvent();
   }, [id]);
 
-  const handleUnlock = () => {
-    if (enteredPassword === event?.password) {
+  const [isUnlocking, setIsUnlocking] = useState(false);
+
+  // The password is checked on the server; it is never sent to the browser.
+  const handleUnlock = async () => {
+    if (!event) return;
+
+    setIsUnlocking(true);
+
+    try {
+      const res = await fetch(`/api/events/${event.id}/unlock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: enteredPassword }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data.unlocked) {
+        toast.error(data.error || 'Incorrect password');
+        return;
+      }
+
       setIsUnlocked(true);
       setShowPasswordPrompt(false);
       toast.success('Event unlocked!');
-    } else {
-      toast.error('Incorrect password');
+    } catch {
+      toast.error('Could not reach the server. Please try again.');
+    } finally {
+      setIsUnlocking(false);
     }
   };
 
@@ -203,7 +225,16 @@ const response = await fetch('/api/bookings', {
       
       const ticketData = await response.json();
       
-      toast.success(`Ticket issued! QR Code sent via Email to ${attendeeEmail} & SMS to ${attendeePhone}.`);
+      const delivered = [
+        ticketData.notifications?.email?.simulated === false && 'email',
+        ticketData.notifications?.sms?.simulated === false && 'SMS',
+      ].filter(Boolean);
+
+      toast.success(
+        delivered.length
+          ? `Ticket issued! QR code sent by ${delivered.join(' and ')}.`
+          : 'Ticket issued! Your QR code is below — save or download it now.'
+      );
 
       setLastBookingInfo({ 
         type: `${selectedTicketType} (${ticketQuantity}x)`, 
@@ -274,7 +305,16 @@ const response = await fetch('/api/bookings', {
       }
 
       const ticket = await response.json();
-      toast.success(`Table reserved! QR Code sent to ${attendeeEmail} & ${attendeePhone}.`);
+      const tableDelivered = [
+        ticket.notifications?.email?.simulated === false && 'email',
+        ticket.notifications?.sms?.simulated === false && 'SMS',
+      ].filter(Boolean);
+
+      toast.success(
+        tableDelivered.length
+          ? `Table reserved! QR code sent by ${tableDelivered.join(' and ')}.`
+          : 'Table reserved! Your QR code is below — save or download it now.'
+      );
       
       setLastBookingInfo({ 
         type: 'Table Reservation', 
@@ -370,8 +410,16 @@ const response = await fetch('/api/bookings', {
                   <Mail size={16} />
                 </div>
                 <div>
-                  <h4 className="text-xs font-black uppercase text-white tracking-wider">Email Dispatched</h4>
-                  <p className="text-[10px] text-orange-200/80">QR Ticket sent to {attendeeEmail}</p>
+                  <h4 className="text-xs font-black uppercase text-white tracking-wider">
+                    {lastBookingInfo.notifications?.email?.simulated
+                      ? 'Email Preview'
+                      : 'Email Dispatched'}
+                  </h4>
+                  <p className="text-[10px] text-orange-200/80">
+                    {lastBookingInfo.notifications?.email?.simulated
+                      ? `Email delivery is not configured — nothing was sent to ${attendeeEmail}`
+                      : `QR Ticket sent to ${attendeeEmail}`}
+                  </p>
                 </div>
               </div>
 
@@ -380,7 +428,11 @@ const response = await fetch('/api/bookings', {
                 className="w-full bg-orange-600/30 hover:bg-orange-600/50 border border-orange-500/40 text-orange-200 py-2 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5"
               >
                 <Eye size={13} />
-                <span>View Sent Email</span>
+                <span>
+                  {lastBookingInfo.notifications?.email?.simulated
+                    ? 'View Email Preview'
+                    : 'View Sent Email'}
+                </span>
               </button>
             </div>
 
@@ -391,8 +443,16 @@ const response = await fetch('/api/bookings', {
                   <Send size={16} />
                 </div>
                 <div>
-                  <h4 className="text-xs font-black uppercase text-white tracking-wider">SMS Dispatched</h4>
-                  <p className="text-[10px] text-blue-200/80">Text message sent to {attendeePhone}</p>
+                  <h4 className="text-xs font-black uppercase text-white tracking-wider">
+                    {lastBookingInfo.notifications?.sms?.simulated
+                      ? 'SMS Preview'
+                      : 'SMS Dispatched'}
+                  </h4>
+                  <p className="text-[10px] text-blue-200/80">
+                    {lastBookingInfo.notifications?.sms?.simulated
+                      ? `SMS delivery is not configured — nothing was sent to ${attendeePhone}`
+                      : `Text message sent to ${attendeePhone}`}
+                  </p>
                 </div>
               </div>
 
@@ -401,7 +461,11 @@ const response = await fetch('/api/bookings', {
                 className="w-full bg-blue-600/30 hover:bg-blue-600/50 border border-blue-500/40 text-blue-200 py-2 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5"
               >
                 <Smartphone size={13} />
-                <span>View Sent SMS Text</span>
+                <span>
+                  {lastBookingInfo.notifications?.sms?.simulated
+                    ? 'View SMS Preview'
+                    : 'View Sent SMS Text'}
+                </span>
               </button>
             </div>
           </div>
@@ -551,12 +615,14 @@ const response = await fetch('/api/bookings', {
               className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-center text-xl font-bold focus:outline-none focus:border-orange-500"
               value={enteredPassword}
               onChange={e => setEnteredPassword(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleUnlock()}
             />
             <button 
               onClick={handleUnlock}
-              className="w-full bg-orange-600 text-white py-4 rounded-full font-black uppercase tracking-wider hover:bg-orange-500 transition-all"
+              disabled={isUnlocking}
+              className="w-full bg-orange-600 text-white py-4 rounded-full font-black uppercase tracking-wider hover:bg-orange-500 transition-all disabled:opacity-50"
             >
-              Unlock Event
+              {isUnlocking ? 'Checking…' : 'Unlock Event'}
             </button>
           </div>
         </motion.div>

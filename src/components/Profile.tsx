@@ -1,3 +1,4 @@
+import type { FormEvent } from 'react';
 import { useState, useEffect } from 'react';
 import { UserProfile, Ticket, Reservation, Event } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
@@ -185,7 +186,7 @@ console.log('PROFILE RESOLVED USER ID:', userId);
   }, [user]);
 
   const handleTransferSubmit = async (
-    e: React.FormEvent
+    e: FormEvent
   ) => {
     e.preventDefault();
 
@@ -469,9 +470,9 @@ console.log('PROFILE RESOLVED USER ID:', userId);
                                 ? new Date(
                                     ticket.event.date
                                   ).toLocaleDateString()
-                                : ticket.date
+                                : ticket.eventDate
                                 ? new Date(
-                                    ticket.date
+                                    ticket.eventDate
                                   ).toLocaleDateString()
                                 : 'N/A'}
                             </div>
@@ -483,7 +484,7 @@ console.log('PROFILE RESOLVED USER ID:', userId);
                               />
 
                               {ticket.event?.location ||
-                                ticket.location ||
+                                ticket.eventLocation ||
                                 'N/A'}
                             </div>
 
